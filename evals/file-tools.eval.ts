@@ -1,0 +1,24 @@
+import {  evaluate } from "@lmnr-ai/lmnr";
+import dataset from "./data/file-tools.json" with {type: "json"}
+import { singleTurnExecutorWithMocks } from "./executors";
+import type { EvalData } from "./types";
+import { toolSelectionScore } from "./evaluators.ts"
+
+const executor = async (data: EvalData) => {
+    return singleTurnExecutorWithMocks(data)
+}
+
+evaluate({
+    data: dataset as any,
+    executor,
+    evaluators: {
+        selectionScore: (output: any, target:any ) => {
+            if(target?.category === "secondary") return 1;
+
+            return toolSelectionScore(output, target)
+        }
+    },
+    groupName: "file-tools-selection"
+
+    
+})
