@@ -1,4 +1,4 @@
-import { generateText, stepCountIs, tool, type ToolSet } from "ai";
+import { generateText, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
 
@@ -9,6 +9,7 @@ import type {
   MultiTurnResult,
 } from "./types.ts";
 import { buildMessages, buildMockedTools } from "./utils.ts";
+import { SYSTEM_PROMPT } from "../src/agent/system/prompt.ts";
 
 /**
  * Tool definitions for mocked single-turn evaluations.
@@ -101,3 +102,61 @@ export async function singleTurnWithMocks(
  * Multi-turn executor with mocked tools.
  * Runs a complete agent loop with tools returning fixed values.
  */
+
+export async function multiTurnWithMocks(
+  data: MultiTurnEvalData,
+): Promise<MultiTurnResult> {
+  const tools = buildMockedTools(data.mockTools);
+  const messages: ModelMessage[] = data.messages ?? [ //no need to type this (but we did anyways) since the instructor already created a method called buildMessages
+    {
+      role: "system",
+      content: SYSTEM_PROMPT,
+    },
+    {
+      role: "user",
+      content: data.prompt ?? "",
+    }
+  ]; 
+
+  //this is where the prompt happens and the LLM does its thing
+  const result = await generateText({
+    model: openai(data.config?.model ?? "gpt-5-mini"),
+    messages,
+    tools,
+    stopWhen: stepCountIs(data.config?.maxSteps ?? 20),
+  })
+
+  //now that the result from the prompt is completed
+  //now we will be doing collection so we can pass the judge the right format of things that it is expecting
+  //we need the tools that were called, the order they were called in, and the final results of everything so the judge can evaluate
+  const allToolsCalls: string[] = [];
+  const steps = result.steps.map((step) => { //what is a step though? a step is a single iteration of the agent loop, where the LLM can make a decision, call tools, and produce output. Each step can have tool calls and results, as well as text output.
+    const stepToolCalls = (step.toolCalls ?? []).map((tc) => {
+      allToolsCalls.push(tc.toolName);
+      return {
+        toolName: tc.toolName,
+        args: "args" in tc ? tc.args : {},
+      }
+    }); 
+
+    const stepToolResults = (step.staticToolResults ?? []).map((tr) => ({
+      toolName: tr.toolName,
+      result: "results" in tr ? tr.results : tr,
+    }));   
+
+    return {
+      toolCalls: stepToolCalls.length > 0 ? stepToolCalls : undefined,
+      toolResults: stepToolResults.length > 0 ? stepToolResults : undefined,
+      text: step.text || undefined,
+    }
+  });
+
+  const toolsUsed = [...new Set(allToolsCalls)];
+
+  return {
+    text: result.text,
+    steps,
+    toolsUsed,
+    toolCallOrder: allToolsCalls,
+  }
+}

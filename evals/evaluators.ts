@@ -9,6 +9,54 @@ import type {
   MultiTurnResult,
 } from "./types.ts";
 
+const judgeSchema = z.object({
+  score: z.number().min(1).max(10).describe("Score from 1 to 10 where 10 is perfect"), //it's better to use whole numbers for scoring because llm have trouble with decimals and fractions
+  reason: z.string().describe("Reason for the score, explaining why the score was given"),
+}); //hey just we you need you to return an object that looks like this
+
+export const llmJudge = async (
+  output: MultiTurnResult,
+  target:   MultiTurnTarget,
+) => {
+  const result = await generateObject({
+    model: openai("gpt-5.1"),
+    schema: judgeSchema,
+    schemaName: "evaluation",
+    providerOptions: {
+      openai: {
+        reasoningEffort: "high",
+      }            
+    },
+    schemaDescription: "Evaluation of AI agent response",
+    messages: [
+      {
+        role: "system",
+        content: `You are an evaluation judge. Score the agent's response on a scale of 1-10.
+
+          Scoring criteria:
+          - 10: Response fully addresses the task using tool results correctly
+          - 7-9: Response is mostly correct with minor issues
+          - 4-6: Response partially addresses the task
+          - 1-3: Response is mostly incorrect or irrelevant`,
+      }, //this next section is the 'coding a user message' part of the course
+      {
+        role: "user",
+        content: `Task ${target.originalTask}
+        
+        Tools called: ${JSON.stringify(output.toolCallOrder)}
+        Tool results provided: ${JSON.stringify(target.mockToolResults)}
+
+        Agent's final answer: ${output.text}
+
+        Evaluate if this response correctly use the tool results to answer the task.
+        `
+      }
+    ]    
+  }) //same as generate text except it takes a schema and returns an object that matches the schema, similar to tool calling objects
+
+  return result.object.score / 10; //return a score between 0 and 1
+}
+
 export function toolsSelected(
   output: SingleTurnResult | MultiTurnResult,
   target: EvalTarget | MultiTurnTarget,
