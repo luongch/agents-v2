@@ -58,15 +58,15 @@ export function isOverThreshold(
   contextWindow: number,
   threshold: number = DEFAULT_THRESHOLD,
 ): boolean {
-  return false;
+  return totalTokens >= contextWindow * threshold;
 }
 
 /**
- * Calculate usage percentage
+ * Calculate usage percentage of context window we've used so far
  */
 export function calculateUsagePercentage(
   totalTokens: number,
   contextWindow: number,
 ): number {
-  return 0;
+  return (totalTokens/contextWindow) * 100;
 }

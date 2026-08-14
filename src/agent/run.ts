@@ -9,8 +9,17 @@ import type { AgentCallbacks, ToolCallInfo } from "../types.ts";
 
 import { filterCompatibleMessages } from "./system/filterMessages.ts";
 
+import {
+  estimateMessagesTokens,
+  getModelLimits,
+  isOverThreshold,
+  calculateUsagePercentage,
+  compactConversation,
+  DEFAULT_THRESHOLD,
+} from "./context/index.ts"
+
 Laminar.initialize({
-  projectApiKey: process.env.LMNR_API_KEY,
+  projectApiKey: process.env.LMNR_PROJECT_API_KEY,
 });
 
 const MODEL_NAME = "gpt-5-mini";
@@ -20,14 +29,22 @@ export async function runAgent(
   conversationHistory: ModelMessage[],
   callbacks: AgentCallbacks,
 ): Promise<ModelMessage[]> {
+  const modelLimits = getModelLimits(MODEL_NAME)
+  
   // Filter and check if we need to compact the conversation history before starting
   const workingHistory = filterCompatibleMessages(conversationHistory);
 
-  const messages: ModelMessage[] = [
+  let messages: ModelMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...workingHistory,
     { role: "user", content: userMessage },
   ];
+
+  const precheckTokens = estimateMessagesTokens(messages)
+
+  if(isOverThreshold(precheckTokens.total, modelLimits.contextWindow)) {
+    messages = await compactConversation(workingHistory, MODEL_NAME)
+  }
 
   let fullResponse = "";
 
@@ -41,6 +58,20 @@ export async function runAgent(
         tracer: getTracer(),
       },
     });
+
+    const reportTokenUsage = () => {
+      if(callbacks.onTokenUsage) {
+        const usage = estimateMessagesTokens(messages);
+        callbacks.onTokenUsage({
+          inputTokens: usage.input,
+          outputTokens: usage.output,
+          totalTokens: usage.total,
+          contextWindow: modelLimits.contextWindow,
+          threshold: DEFAULT_THRESHOLD,
+          percentage: calculateUsagePercentage(usage.total, modelLimits.contextWindow)
+        })
+      }
+    }
 
     const toolCalls: ToolCallInfo[] = [];
     let currentText = "";
@@ -91,12 +122,13 @@ export async function runAgent(
     if (finishReason !== "tool-calls" || toolCalls.length === 0) {
       const responseMessages = await result.response;
       messages.push(...responseMessages.messages);
-
+      reportTokenUsage();
       break;
     }
 
     const responseMessages = await result.response;
     messages.push(...responseMessages.messages);
+    reportTokenUsage();
 
     for (const tc of toolCalls) {
       const result = await executeTool(tc.toolName, tc.args);
@@ -113,6 +145,8 @@ export async function runAgent(
           },
         ],
       });
+
+      reportTokenUsage();
     }
   }
 
